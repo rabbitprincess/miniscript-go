@@ -8,119 +8,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/benma/miniscript-go/utils"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 )
-
-const (
-	// Length of a pubkey inside P2WSH, which are 33 byte compressed pubkeys.
-	pubKeyLen = 33
-	// Length of a pubkey data push in P2WSH, which is 1+33 (1 byte for the VarInt encoding of 33).
-	pubKeyDataPushLen = 34
-
-	// The maximum size in bytes of a standard witnessScript
-	maxStandardP2WSHScriptSize = 3600
-	// Maximum number of non-push operations per script
-	maxOpsPerScript = 201
-
-	// Maximum number of keys in a multisig.
-	multisigMaxKeys = 20
-)
-
-const (
-	// All fragment identifiers.
-
-	f_0         = "0"         // 0
-	f_1         = "1"         // 1
-	f_pk_k      = "pk_k"      // pk_k(key)
-	f_pk_h      = "pk_h"      // pk_h(key)
-	f_pk        = "pk"        // pk(key) = c:pk_k(key)
-	f_pkh       = "pkh"       // pkh(key) = c:pk_h(key)
-	f_sha256    = "sha256"    // sha256(h)
-	f_ripemd160 = "ripemd160" // ripemd160(h)
-	f_hash256   = "hash256"   // hash256(h)
-	f_hash160   = "hash160"   // hash160(h)
-	f_older     = "older"     // older(n)
-	f_after     = "after"     // after(n)
-	f_andor     = "andor"     // andor(X,Y,Z)
-	f_and_v     = "and_v"     // and_v(X,Y)
-	f_and_b     = "and_b"     // and_b(X,Y)
-	f_and_n     = "and_n"     // and_n(X,Y) = andor(X,Y,0)
-	f_or_b      = "or_b"      // or_b(X,Z)
-	f_or_c      = "or_c"      // or_c(X,Z)
-	f_or_d      = "or_d"      // or_d(X,Z)
-	f_or_i      = "or_i"      // or_i(X,Z)
-	f_thresh    = "thresh"    // thresh(k,X1,...,Xn)
-	f_multi     = "multi"     // multi(k,key1,...,keyn)
-	f_wrap_a    = "a"         // a:X
-	f_wrap_s    = "s"         // s:X
-	f_wrap_c    = "c"         // c:X
-	f_wrap_d    = "d"         // d:X
-	f_wrap_v    = "v"         // v:X
-	f_wrap_j    = "j"         // j:X
-	f_wrap_n    = "n"         // n:X
-	f_wrap_t    = "t"         // t:X = and_v(X,1)
-	f_wrap_l    = "l"         // l:X = or_i(0,X)
-	f_wrap_u    = "u"         // u:X = or_i(X,0)
-)
-
-type basicType string
-
-const (
-	typeB basicType = "B"
-	typeV basicType = "V"
-	typeK basicType = "K"
-	typeW basicType = "W"
-)
-
-type properties struct {
-	// Basic type properties
-	z, o, n, d, u bool
-	// Malleability properties.
-	// If `m`, a non-malleable satisfaction is guaranteed to exist.
-	// The purpose of s/f/e is only to compute `m` and can be disregarded afterwards.
-	m, s, f, e bool
-	// Check if the rightmost script byte produced by this node is OP_EQUAL, OP_CHECKSIG or
-	// OP_CHECKMULTISIG.
-	//
-	// If so, it can be be converted into the VERIFY version if an ancestor is the verify wrapper
-	// `v`, i.e. OP_EQUALVERIFY, OP_CHECKSIGVERIFY and OP_CHECKMULTISIGVERIFY instead of using two
-	// opcodes, e.g. `OP_EQUAL OP_VERIFY`.
-	canCollapseVerify bool
-}
-
-func (p properties) String() string {
-	s := strings.Builder{}
-	if p.z {
-		s.WriteRune('z')
-	}
-	if p.o {
-		s.WriteRune('o')
-	}
-	if p.n {
-		s.WriteRune('n')
-	}
-	if p.d {
-		s.WriteRune('d')
-	}
-	if p.u {
-		s.WriteRune('u')
-	}
-	if p.m {
-		s.WriteRune('m')
-	}
-	if p.s {
-		s.WriteRune('s')
-	}
-	if p.f {
-		s.WriteRune('f')
-	}
-	if p.e {
-		s.WriteRune('e')
-	}
-	return s.String()
-}
 
 // AST is the abstract syntax tree representing a miniscript expression.
 type AST struct {
@@ -219,7 +111,7 @@ func (a *AST) drawTree(w io.Writer, indent string) {
 		fmt.Fprintf(w, " [%s]", typ)
 	}
 	if a.value != nil {
-		h := hex.EncodeToString(a.value)
+		h := utils.EncodeHex(a.value)
 		if h != a.identifier {
 			fmt.Fprintf(w, " [%x]", a.value)
 		}
@@ -310,7 +202,7 @@ func (a *AST) ApplyVars(lookupVar func(identifier string) ([]byte, error)) error
 						node.identifier, pubKeyLen, len(key))
 				}
 
-				pubKeyHex := hex.EncodeToString(key)
+				pubKeyHex := utils.EncodeHex(key)
 				if _, ok := allPubKeys[pubKeyHex]; ok {
 					return nil, fmt.Errorf(
 						"duplicate key found at %s (key=%s, arg identifier=%s)",
@@ -335,7 +227,7 @@ func (a *AST) ApplyVars(lookupVar func(identifier string) ([]byte, error)) error
 			if hashValue == nil {
 				// If the hash value was not a variable, assume it's the hash value directly encoded
 				// as hex.
-				hashValue, err = hex.DecodeString(node.args[0].identifier)
+				hashValue, err = utils.DecodeHex(node.args[0].identifier)
 				if err != nil {
 					return nil, err
 				}
@@ -364,69 +256,8 @@ func (a *AST) expectBasicType(typ basicType) error {
 	return nil
 }
 
-type stack struct {
-	elements []*AST
-}
-
-func (s *stack) push(element *AST) {
-	s.elements = append(s.elements, element)
-}
-
-func (s *stack) pop() *AST {
-	if len(s.elements) == 0 {
-		return nil
-	}
-	top := s.elements[len(s.elements)-1]
-	s.elements = s.elements[:len(s.elements)-1]
-	return top
-}
-
-func (s *stack) top() *AST {
-	if len(s.elements) == 0 {
-		return nil
-	}
-	return s.elements[len(s.elements)-1]
-}
-
-func (s *stack) size() int {
-	return len(s.elements)
-}
-
-// - Written by ChatGPT.
-// splitString keeps separators as individual slice elements and splits a string
-// into a slice of strings based on multiple separators. It removes any empty
-// elements from the output slice.
-func splitString(s string, isSeparator func(c rune) bool) []string {
-	// Create a slice to hold the substrings
-	substrs := make([]string, 0)
-
-	// Set the initial index to zero
-	i := 0
-
-	// Iterate over the characters in the string
-	for i < len(s) {
-		// Find the index of the first separator in the string
-		j := strings.IndexFunc(s[i:], isSeparator)
-		if j == -1 {
-			// If no separator was found, append the remaining substring and return
-			substrs = append(substrs, s[i:])
-			return substrs
-		}
-		j += i
-		// If a separator was found, append the substring before it
-		if j > i {
-			substrs = append(substrs, s[i:j])
-		}
-
-		// Append the separator as a separate element
-		substrs = append(substrs, s[j:j+1])
-		i = j + 1
-	}
-	return substrs
-}
-
 func createAST(miniscript string) (*AST, error) {
-	tokens := splitString(miniscript, func(c rune) bool {
+	tokens := utils.SplitString(miniscript, func(c rune) bool {
 		return c == '(' || c == ')' || c == ','
 	})
 
@@ -438,7 +269,7 @@ func createAST(miniscript string) (*AST, error) {
 	}
 
 	// Build abstract syntax tree.
-	var stack stack
+	var stack utils.Stack[*AST]
 	for i, token := range tokens {
 		switch token {
 		case "(":
@@ -455,8 +286,8 @@ func createAST(miniscript string) (*AST, error) {
 				return nil, fmt.Errorf("the sequence %s%s is invalid", tokens[i-1], token)
 			}
 
-			arg := stack.pop()
-			parent := stack.top()
+			arg := stack.Pop()
+			parent := stack.Top()
 			if arg == nil || parent == nil {
 				return nil, errors.New("unbalanced")
 			}
@@ -478,13 +309,13 @@ func createAST(miniscript string) (*AST, error) {
 				return nil, fmt.Errorf("no identifier found after colon after wrappers: %s", wrappers)
 			}
 
-			stack.push(&AST{wrappers: wrappers, identifier: identifier})
+			stack.Push(&AST{wrappers: wrappers, identifier: identifier})
 		}
 	}
-	if stack.size() != 1 {
+	if stack.Size() != 1 {
 		return nil, errors.New("unbalanced")
 	}
-	return stack.top(), nil
+	return stack.Top(), nil
 }
 
 // argCheck checks that each identifier is a known miniscript identifier and that it has the correct

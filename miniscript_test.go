@@ -3,7 +3,6 @@ package miniscript
 import (
 	"bufio"
 	"bytes"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/benma/miniscript-go/utils"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcutil"
@@ -27,20 +27,12 @@ func TestSplitString(t *testing.T) {
 		return c == '(' || c == ')' || c == ','
 	}
 
-	require.Equal(t, []string{}, splitString("", separators))
-	require.Equal(t, []string{"0"}, splitString("0", separators))
-	require.Equal(t, []string{"0", ")", "(", "1", "("}, splitString("0)(1(", separators))
+	require.Equal(t, []string{}, utils.SplitString("", separators))
+	require.Equal(t, []string{"0"}, utils.SplitString("0", separators))
+	require.Equal(t, []string{"0", ")", "(", "1", "("}, utils.SplitString("0)(1(", separators))
 	require.Equal(t,
 		[]string{"or_b", "(", "pk", "(", "key_1", ")", ",", "s:pk", "(", "key_2", ")", ")"},
-		splitString("or_b(pk(key_1),s:pk(key_2))", separators))
-}
-
-func unhex(s string) []byte {
-	b, err := hex.DecodeString(s)
-	if err != nil {
-		panic(err)
-	}
-	return b
+		utils.SplitString("or_b(pk(key_1),s:pk(key_2))", separators))
 }
 
 // Test vectors for miniscripts that are invalid (failed type check).
@@ -249,9 +241,6 @@ func testRedeem(
 	}
 
 	utxoAmount := int64(999799)
-	if err != nil {
-		return err
-	}
 	utxoPkScript, err := txscript.PayToAddrScript(addr)
 	if err != nil {
 		return err
@@ -335,7 +324,7 @@ func testRedeem(
 
 	rawTx := &bytes.Buffer{}
 	_ = transaction.BtcEncode(rawTx, 0, wire.WitnessEncoding)
-	rawTxHex := hex.EncodeToString(rawTx.Bytes())
+	rawTxHex := utils.EncodeHex(rawTx.Bytes())
 	log.Println("raw transaction", rawTxHex)
 	return nil
 }
@@ -358,14 +347,14 @@ func TestRedeem(t *testing.T) {
 	//miniscript := "or_b(and_b(sha256(e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e),s:pk(key_2)),s:pk(key_3))"
 
 	privKey1, pubKey1 := btcec.PrivKeyFromBytes(
-		unhex("22a47fa09a223f2aa079edf85a7c2d4f8720ee63e502ee2869afab7de234b80c"))
+		utils.MustDecodeHex("22a47fa09a223f2aa079edf85a7c2d4f8720ee63e502ee2869afab7de234b80c"))
 	privKey2, pubKey2 := btcec.PrivKeyFromBytes(
-		unhex("9106e8d2191b58e6c12f10b70d86ba54396db99ecedffd3c150e72960bd11305"))
+		utils.MustDecodeHex("9106e8d2191b58e6c12f10b70d86ba54396db99ecedffd3c150e72960bd11305"))
 	privKey3, pubKey3 := btcec.PrivKeyFromBytes(
-		unhex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+		utils.MustDecodeHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
 
 	// hash of hex(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
-	h := unhex("e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e")
+	h := utils.MustDecodeHex("e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e")
 
 	lookupVar := func(identifier string) ([]byte, error) {
 		switch identifier {
@@ -401,7 +390,7 @@ func TestRedeem(t *testing.T) {
 	preimage := func(hasPreimage bool) func(hashFunc string, hash []byte) ([]byte, bool) {
 		return func(hashFunc string, hash []byte) ([]byte, bool) {
 			if hasPreimage && hashFunc == "sha256" && bytes.Equal(hash, h) {
-				return unhex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), true
+				return utils.MustDecodeHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), true
 			}
 			return nil, false
 		}
