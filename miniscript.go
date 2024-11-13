@@ -29,6 +29,8 @@ type AST struct {
 	args      []*AST
 	scriptLen int
 	opCount   ops
+
+	taproot bool
 }
 
 // typeRepr returns the basic type (B, V, K or W) followed by all type properties.
@@ -61,11 +63,11 @@ func (a *AST) validSatisfactions() error {
 	if err := a.isValid(); err != nil {
 		return err
 	}
-	if a.maxOpCount() > maxOpsPerScript {
+	if a.maxOpCount() > MaxOpsPerScript {
 		return fmt.Errorf(
 			"The script requires a maximum number of %d ops, which is larger than the consensus limit of %d",
 			a.maxOpCount(),
-			maxOpsPerScript)
+			MaxOpsPerScript)
 	}
 	// TODO check stack size
 	return nil
@@ -365,7 +367,7 @@ func argCheck(node *AST) (*AST, error) {
 		if err := expectArgs(2); err != nil {
 			return nil, err
 		}
-	case f_thresh, f_multi:
+	case f_thresh, f_multi, f_multi_a:
 		if len(node.args) < 2 {
 			return nil, fmt.Errorf("%s must have at least two arguments", node.identifier)
 		}
@@ -385,8 +387,19 @@ func argCheck(node *AST) (*AST, error) {
 				"%s(k) -> k must 1 ≤ k ≤ n, but got: %s", node.identifier, _k.identifier)
 		}
 		if node.identifier == f_multi {
-			if numSubs > multisigMaxKeys {
-				return nil, fmt.Errorf("number of multisig keys cannot exceed %d", multisigMaxKeys)
+			if numSubs > MaxPubKeysPerMultisig {
+				return nil, fmt.Errorf("number of multisig keys cannot exceed %d", MaxPubKeysPerMultisig)
+			}
+			// Multisig keys are variables, they can't have subexpressions.
+			for _, arg := range node.args {
+				if len(arg.args) > 0 {
+					return nil, fmt.Errorf("arguments of %s must not contain subexpressions", node.identifier)
+				}
+			}
+		}
+		if node.identifier == f_multi_a {
+			if numSubs > MaxPubKeysPerMultiA {
+				return nil, fmt.Errorf("number of multi_a keys cannot exceed %d", MaxPubKeysPerMultisig)
 			}
 			// Multisig keys are variables, they can't have subexpressions.
 			for _, arg := range node.args {
@@ -658,7 +671,7 @@ func typeCheck(node *AST) (*AST, error) {
 		}
 		node.props.d = true
 		node.props.u = true
-	case f_multi:
+	case f_multi, f_multi_a:
 		node.basicType = typeB
 		node.props.n = true
 		node.props.d = true
@@ -899,7 +912,11 @@ func computeScriptLen(node *AST) (*AST, error) {
 	case f_0, f_1:
 		node.scriptLen = 1
 	case f_pk_k:
-		node.scriptLen = pubKeyDataPushLen
+		if node.taproot {
+			node.scriptLen = pubKeyLen
+		} else {
+			node.scriptLen = pubKeyDataPushLen
+		}
 	case f_pk_h:
 		node.scriptLen = 24
 	case f_older, f_after:
@@ -924,6 +941,10 @@ func computeScriptLen(node *AST) (*AST, error) {
 		k := node.args[0].num
 		numKeys := len(node.args) - 1
 		node.scriptLen = numPushLen(int64(k)) + numKeys*pubKeyDataPushLen + numPushLen(int64(numKeys)) + 1
+	case f_multi_a:
+		k := node.args[0].num
+		numKeys := len(node.args) - 1
+		node.scriptLen = (1+32+1)*numKeys + numPushLen(int64(k)) + 1 // (1 for OP_CODE, 32 for key, 1 for separator) per key
 	case f_wrap_v:
 		if node.args[0].props.canCollapseVerify {
 			// OP_VERIFY not needed, collapsed into OP_EQUALVERIfY, OP_CHECKSIGVERIFY, OP_CHECKMULTISIGVERIFY
@@ -1111,6 +1132,10 @@ func buildScript(node *AST, b *txscript.ScriptBuilder, collapseVerify bool) erro
 			b.AddOp(txscript.OP_EQUAL)
 		}
 	case f_multi:
+		if node.taproot {
+			return fmt.Errorf("%s can not be used in Taproot context", node.identifier)
+		}
+
 		k := node.args[0].num
 		b.AddInt64(int64(k))
 		for _, arg := range node.args[1:] {
@@ -1124,6 +1149,41 @@ func buildScript(node *AST, b *txscript.ScriptBuilder, collapseVerify bool) erro
 			b.AddOp(txscript.OP_CHECKMULTISIGVERIFY)
 		} else {
 			b.AddOp(txscript.OP_CHECKMULTISIG)
+		}
+	case f_multi_a:
+		if !node.taproot {
+			return fmt.Errorf("%s can only be used in Taproot context", node.identifier)
+		}
+		// Retrieve the threshold `k`
+		k := node.args[0].num
+		if k < 1 || k > uint64(len(node.args)-1) {
+			return fmt.Errorf("%s(k, ...) -> k must 1 ≤ k ≤ n, but got: %d", node.identifier, k)
+		}
+
+		// First key and OP_CHECKSIG
+		firstKey := node.args[1].value
+		if firstKey == nil {
+			return fmt.Errorf("empty key for %s (%s)", node.identifier, node.args[1].identifier)
+		}
+		b.AddData(firstKey)
+		b.AddOp(txscript.OP_CHECKSIG)
+
+		// Additional keys with OP_CHECKSIGADD
+		for i := 2; i < len(node.args); i++ {
+			key := node.args[i].value
+			if key == nil {
+				return fmt.Errorf("empty key for %s (%s)", node.identifier, node.args[i].identifier)
+			}
+			b.AddData(key)
+			b.AddOp(txscript.OP_CHECKSIGADD)
+		}
+
+		// Add `k` and comparison operator
+		b.AddInt64(int64(k))
+		if node.props.canCollapseVerify && collapseVerify {
+			b.AddOp(txscript.OP_NUMEQUALVERIFY)
+		} else {
+			b.AddOp(txscript.OP_NUMEQUAL)
 		}
 	case f_wrap_a:
 		b.AddOp(txscript.OP_TOALTSTACK)

@@ -11,10 +11,13 @@ const (
 	// The maximum size in bytes of a standard witnessScript
 	maxStandardP2WSHScriptSize = 3600
 	// Maximum number of non-push operations per script
-	maxOpsPerScript = 201
+	MaxOpsPerScript = 201
 
 	// Maximum number of keys in a multisig.
-	multisigMaxKeys = 20
+	MaxPubKeysPerMultisig = 20
+
+	// The limit of keys in OP_CHECKSIGADD-based scripts. It is due to the stack limit in BIP342
+	MaxPubKeysPerMultiA = 999
 )
 
 // This type encapsulates the miniscript type system properties.
@@ -141,4 +144,5 @@ const (
 	f_wrap_t    = "t"         // t:X = and_v(X,1)
 	f_wrap_l    = "l"         // l:X = or_i(0,X)
 	f_wrap_u    = "u"         // u:X = or_i(X,0)
+	f_multi_a   = "multi_a"   // multi_a(k,key1,...,keyn)
 )
